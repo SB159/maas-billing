@@ -201,7 +201,6 @@ run_smoke_tests() {
     echo "-- Smoke Testing --"
     
     if [ "$SKIP_SMOKE" = false ]; then
-        # if ! (cd "$PROJECT_ROOT" && bash test/e2e/smoke.sh); then
         if ! (cd "$PROJECT_ROOT" && HOST="$HOST" MAAS_API_BASE_URL="$MAAS_API_BASE_URL" INSECURE_HTTP="$INSECURE_HTTP" bash test/e2e/smoke.sh); then
             echo "❌ ERROR: Smoke tests failed"
         else
