@@ -64,9 +64,9 @@ func init() {
 
 // --- Test helpers ---
 
-// newMaasModelRef is a helper function to create a MaasModelRef resource.
-func newMaaSModelRef(name, ns, kind, refName, refNS string) *maasv1alpha1.MaaSModelRef {
-	m := &maasv1alpha1.MaaSModelRef{
+// newMaaSModelRef is a helper function to create a MaaSModelRef resource.
+func newMaaSModelRef(name, ns, kind, refName string) *maasv1alpha1.MaaSModelRef {
+	return &maasv1alpha1.MaaSModelRef{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
 		Spec: maasv1alpha1.MaaSModelSpec{
 			ModelRef: maasv1alpha1.ModelReference{
@@ -75,10 +75,6 @@ func newMaaSModelRef(name, ns, kind, refName, refNS string) *maasv1alpha1.MaaSMo
 			},
 		},
 	}
-	if refNS != "" {
-		m.Spec.ModelRef.Namespace = refNS
-	}
-	return m
 }
 
 // newLLMISvc is a helper function to create a LLMInferenceService resource.
@@ -263,7 +259,7 @@ func TestMaaSModelReconciler_LLMISvcReadyTransition_ModelBecomesReady(t *testing
 
 	route := newLLMISvcRoute(llmisvcName, ns)
 	llmisvc := newLLMISvc(llmisvcName, ns, corev1.ConditionFalse)
-	model := newMaaSModelRef(modelName, ns, "LLMInferenceService", llmisvcName, "")
+	model := newMaaSModelRef(modelName, ns, "LLMInferenceService", llmisvcName)
 	r, c := newTestReconciler(model, route, llmisvc)
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: modelName, Namespace: ns}}
 
@@ -325,7 +321,7 @@ func TestMaaSModelReconciler_LLMISvcReadyToNotReady_ModelBecomesPending(t *testi
 
 	route := newLLMISvcRoute(llmisvcName, ns)
 	llmisvc := newLLMISvc(llmisvcName, ns, corev1.ConditionTrue)
-	model := newMaaSModelRef(modelName, ns, "LLMInferenceService", llmisvcName, "")
+	model := newMaaSModelRef(modelName, ns, "LLMInferenceService", llmisvcName)
 	r, c := newTestReconciler(model, route, llmisvc)
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: modelName, Namespace: ns}}
 
@@ -379,7 +375,7 @@ func TestMaaSModelReconciler_LLMISvcReadyToNotReady_ModelBecomesPending(t *testi
 func TestMapLLMISvcToMaaSModels(t *testing.T) {
 	t.Run("different_kind_not_enqueued", func(t *testing.T) {
 		svc := newLLMISvc("my-svc", "default")
-		model := newMaaSModelRef("ext-model", "default", "ExternalModel", "my-svc", "")
+		model := newMaaSModelRef("ext-model", "default", "ExternalModel", "my-svc")
 		r, _ := newTestReconciler(model, svc)
 		requests := r.mapLLMISvcToMaaSModelRefs(context.Background(), svc)
 		if len(requests) != 0 {
@@ -389,7 +385,7 @@ func TestMapLLMISvcToMaaSModels(t *testing.T) {
 
 	t.Run("different_name_not_enqueued", func(t *testing.T) {
 		svc := newLLMISvc("svc-beta", "default")
-		model := newMaaSModelRef("my-model", "default", "LLMInferenceService", "svc-alpha", "")
+		model := newMaaSModelRef("my-model", "default", "LLMInferenceService", "svc-alpha")
 		r, _ := newTestReconciler(model, svc)
 		requests := r.mapLLMISvcToMaaSModelRefs(context.Background(), svc)
 		if len(requests) != 0 {
@@ -397,33 +393,33 @@ func TestMapLLMISvcToMaaSModels(t *testing.T) {
 		}
 	})
 
-	t.Run("cross_namespace_match", func(t *testing.T) {
-		svc := newLLMISvc("shared-svc", "ns-b")
-		model := newMaaSModelRef("cross-ns-model", "ns-a", "LLMInferenceService", "shared-svc", "ns-b")
+	t.Run("same_namespace_match", func(t *testing.T) {
+		svc := newLLMISvc("shared-svc", "default")
+		model := newMaaSModelRef("my-model", "default", "LLMInferenceService", "shared-svc")
 		r, _ := newTestReconciler(model, svc)
 		requests := r.mapLLMISvcToMaaSModelRefs(context.Background(), svc)
 		if len(requests) != 1 {
-			t.Fatalf("expected 1 request for cross-namespace match, got %d: %v", len(requests), requests)
+			t.Fatalf("expected 1 request for same-namespace match, got %d: %v", len(requests), requests)
 		}
-		if requests[0].Name != "cross-ns-model" || requests[0].Namespace != "ns-a" {
-			t.Errorf("request = %v, want {Name: cross-ns-model, Namespace: ns-a}", requests[0].NamespacedName)
+		if requests[0].Name != "my-model" || requests[0].Namespace != "default" {
+			t.Errorf("request = %v, want {Name: my-model, Namespace: default}", requests[0].NamespacedName)
 		}
 	})
 
-	t.Run("cross_namespace_no_match", func(t *testing.T) {
-		svc := newLLMISvc("shared-svc", "ns-c")
-		model := newMaaSModelRef("cross-ns-model", "ns-a", "LLMInferenceService", "shared-svc", "ns-b")
+	t.Run("different_namespace_not_enqueued", func(t *testing.T) {
+		svc := newLLMISvc("shared-svc", "ns-b")
+		model := newMaaSModelRef("my-model", "ns-a", "LLMInferenceService", "shared-svc")
 		r, _ := newTestReconciler(model, svc)
 		requests := r.mapLLMISvcToMaaSModelRefs(context.Background(), svc)
 		if len(requests) != 0 {
-			t.Errorf("expected no requests for namespace mismatch, got %d: %v", len(requests), requests)
+			t.Errorf("expected no requests for different namespace, got %d: %v", len(requests), requests)
 		}
 	})
 
 	t.Run("multiple_models_same_llmisvc", func(t *testing.T) {
 		svc := newLLMISvc("shared-svc", "default")
-		model1 := newMaaSModelRef("model-1", "default", "LLMInferenceService", "shared-svc", "")
-		model2 := newMaaSModelRef("model-2", "default", "LLMInferenceService", "shared-svc", "")
+		model1 := newMaaSModelRef("model-1", "default", "LLMInferenceService", "shared-svc")
+		model2 := newMaaSModelRef("model-2", "default", "LLMInferenceService", "shared-svc")
 		r, _ := newTestReconciler(model1, model2, svc)
 		requests := r.mapLLMISvcToMaaSModelRefs(context.Background(), svc)
 		if len(requests) != 2 {
@@ -585,7 +581,7 @@ func TestMaaSModelReconciler_DeleteGeneratedPolicies_ManagedAnnotation(t *testin
 						Build()
 
 					r := &MaaSModelRefReconciler{Client: c, Scheme: scheme}
-					if err := r.deleteGeneratedPoliciesByLabel(context.Background(), logr.Discard(), modelName, res.kind, res.group, res.version); err != nil {
+					if err := r.deleteGeneratedPoliciesByLabel(context.Background(), logr.Discard(), namespace, modelName, res.kind, res.group, res.version); err != nil {
 						t.Fatalf("deleteGeneratedPoliciesByLabel: unexpected error: %v", err)
 					}
 

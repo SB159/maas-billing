@@ -31,7 +31,7 @@ type MaaSModelSpec struct {
 	EndpointOverride string `json:"endpointOverride,omitempty"`
 }
 
-// ModelReference references a model endpoint
+// ModelReference references a model endpoint in the same namespace
 type ModelReference struct {
 	// Kind determines which fields are available
 	// +kubebuilder:validation:Enum=LLMInferenceService;ExternalModel
@@ -39,11 +39,6 @@ type ModelReference struct {
 
 	// Name is the name of the model resource
 	Name string `json:"name"`
-
-	// Namespace is the namespace of the model resource
-	// If not specified, defaults to the same namespace as MaaSModelRef
-	// +optional
-	Namespace string `json:"namespace,omitempty"`
 }
 
 // MaaSModelStatus defines the observed state of MaaSModelRef
