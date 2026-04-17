@@ -830,104 +830,7 @@ install_optional_operators() {
 #──────────────────────────────────────────────────────────────
 # RATE LIMITER INSTALLATION
 #──────────────────────────────────────────────────────────────
-
-# Patch Kuadrant/RHCL CSV to recognize OpenShift Gateway controller
-# This is required because Kuadrant needs to know about the Gateway API provider
-# Without this patch, Kuadrant shows "MissingDependency" and AuthPolicies won't be enforced
-patch_kuadrant_csv_for_gateway() {
-  local namespace=$1
-  local operator_prefix=$2
-
-  log_info "Patching $operator_prefix CSV for OpenShift Gateway controller..."
-
-  # Find the CSV
-  local csv_name
-  csv_name=$(kubectl get csv -n "$namespace" --no-headers 2>/dev/null | grep "^${operator_prefix}" | awk '{print $1}' | head -1)
-
-  if [[ -z "$csv_name" ]]; then
-    log_warn "Could not find CSV for $operator_prefix in $namespace, skipping Gateway controller patch"
-    return 0
-  fi
-
-  # Check if ISTIO_GATEWAY_CONTROLLER_NAMES already has both values
-  local current_value
-  current_value=$(kubectl get csv "$csv_name" -n "$namespace" -o jsonpath='{.spec.install.spec.deployments[0].spec.template.spec.containers[0].env[?(@.name=="ISTIO_GATEWAY_CONTROLLER_NAMES")].value}' 2>/dev/null || echo "")
-
-  if [[ "$current_value" == *"istio.io/gateway-controller"* && "$current_value" == *"openshift.io/gateway-controller"* ]]; then
-    log_debug "CSV already has correct ISTIO_GATEWAY_CONTROLLER_NAMES value"
-    return 0
-  fi
-
-  # Find the index of ISTIO_GATEWAY_CONTROLLER_NAMES env var
-  local env_index
-  env_index=$(kubectl get csv "$csv_name" -n "$namespace" -o json | jq '.spec.install.spec.deployments[0].spec.template.spec.containers[0].env | to_entries | .[] | select(.value.name=="ISTIO_GATEWAY_CONTROLLER_NAMES") | .key' 2>/dev/null || echo "")
-
-  if [[ -z "$env_index" ]]; then
-    # Env var doesn't exist, add it
-    log_debug "Adding ISTIO_GATEWAY_CONTROLLER_NAMES to CSV"
-    kubectl patch csv "$csv_name" -n "$namespace" --type='json' -p='[
-      {
-        "op": "add",
-        "path": "/spec/install/spec/deployments/0/spec/template/spec/containers/0/env/-",
-        "value": {
-          "name": "ISTIO_GATEWAY_CONTROLLER_NAMES",
-          "value": "istio.io/gateway-controller,openshift.io/gateway-controller/v1"
-        }
-      }
-    ]' 2>/dev/null || log_warn "Failed to add ISTIO_GATEWAY_CONTROLLER_NAMES to CSV"
-  else
-    # Env var exists, update it
-    log_debug "Updating ISTIO_GATEWAY_CONTROLLER_NAMES in CSV (index: $env_index)"
-    kubectl patch csv "$csv_name" -n "$namespace" --type='json' -p="[
-      {
-        \"op\": \"replace\",
-        \"path\": \"/spec/install/spec/deployments/0/spec/template/spec/containers/0/env/${env_index}/value\",
-        \"value\": \"istio.io/gateway-controller,openshift.io/gateway-controller/v1\"
-      }
-    ]" 2>/dev/null || log_warn "Failed to update ISTIO_GATEWAY_CONTROLLER_NAMES in CSV"
-  fi
-
-  log_info "CSV patched for OpenShift Gateway controller"
-
-  # CRITICAL: Force delete the operator pod to pick up the new env var
-  # OLM updates the deployment spec but doesn't always trigger a pod restart
-  # The operator must have ISTIO_GATEWAY_CONTROLLER_NAMES set BEFORE Kuadrant CR is created
-  log_info "Forcing operator restart to apply new Gateway controller configuration..."
-  
-  # The kuadrant operator deployment is always named kuadrant-operator-controller-manager
-  # regardless of whether we're using rhcl-operator or kuadrant-operator
-  local operator_deployment="kuadrant-operator-controller-manager"
-  if kubectl get deployment "$operator_deployment" -n "$namespace" &>/dev/null; then
-    # Force delete the operator pod - this ensures the new env var is picked up
-    kubectl delete pod -n "$namespace" -l control-plane=controller-manager --force --grace-period=0 2>/dev/null || \
-      kubectl delete pod -n "$namespace" -l app.kubernetes.io/name=kuadrant-operator --force --grace-period=0 2>/dev/null || \
-      kubectl delete pod -n "$namespace" -l app=kuadrant --force --grace-period=0 2>/dev/null || true
-    
-    # Wait for the new pod to be ready
-    log_info "Waiting for operator pod to restart..."
-    sleep 5
-    kubectl rollout status deployment/"$operator_deployment" -n "$namespace" --timeout="${ROLLOUT_TIMEOUT}s" 2>/dev/null || \
-      log_warn "Operator rollout status check timed out (timeout: ${ROLLOUT_TIMEOUT}s)"
-    
-    # Verify the env var is in the RUNNING pod
-    local pod_env
-    pod_env=$(kubectl exec -n "$namespace" deployment/"$operator_deployment" -- env 2>/dev/null | grep ISTIO_GATEWAY_CONTROLLER_NAMES || echo "")
-    
-    if [[ "$pod_env" == *"openshift.io/gateway-controller/v1"* ]]; then
-      log_info "Operator pod is running with OpenShift Gateway controller configuration"
-    else
-      log_warn "Operator pod may not have correct env yet: $pod_env"
-    fi
-    
-    # Give the operator time to fully initialize with the new Gateway controller configuration
-    # This is critical - the operator needs to register as a Gateway controller before Kuadrant CR is created
-    log_info "Waiting 15s for operator to fully initialize with Gateway controller configuration..."
-    sleep 15
-  else
-    log_warn "Could not find operator deployment, waiting 60s for env propagation"
-    sleep 60
-  fi
-}
+# patch_csv_operator_container_env and patch_kuadrant_csv live in deployment-helpers.sh
 
 install_policy_engine() {
   log_info "Installing policy engine: $POLICY_ENGINE"
@@ -949,7 +852,7 @@ install_policy_engine() {
       fi
 
       # Patch RHCL CSV to recognize OpenShift Gateway controller
-      patch_kuadrant_csv_for_gateway "rh-connectivity-link" "rhcl-operator"
+      patch_kuadrant_csv "rh-connectivity-link" "rhcl-operator"
 
       # Apply RHCL/Kuadrant custom resource
       apply_kuadrant_cr "rh-connectivity-link"
@@ -1012,7 +915,7 @@ EOF
       fi
 
       # Patch Kuadrant CSV to recognize OpenShift Gateway controller
-      patch_kuadrant_csv_for_gateway "$kuadrant_ns" "kuadrant-operator"
+      patch_kuadrant_csv "$kuadrant_ns" "kuadrant-operator"
 
       # Apply Kuadrant custom resource
       apply_kuadrant_cr "$kuadrant_ns"
